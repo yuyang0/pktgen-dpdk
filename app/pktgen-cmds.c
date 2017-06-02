@@ -78,6 +78,72 @@ convert_bitfield(bf_spec_t *bf)
 	return rnd_bitmask;
 }
 
+static uint16_t
+pktgen_calc_packet_size(port_info_t *info, uint32_t seqnum)
+{
+  pkt_seq_t *pkt = &info->seq_pkt[seqnum];
+  uint16_t ethType = pkt->ethType;
+  uint16_t ipProto = pkt->ipProto;
+  uint16_t dport = pkt->dport;
+  size_t l4len = (pkt->l4data != NULL) ? pkt->l4data->len : 0;
+  int extra_count = 0;
+	uint16_t tlen = 0;
+  uint16_t ether_hdr_size;
+  uint32_t flags = rte_atomic32_read(&info->port_flags);
+
+  if (seqnum == RANGE_PKT) {
+      dport = info->range.dst_port;
+  }
+  if (flags & SEND_VLAN_ID) {
+		ether_hdr_size = sizeof(struct ether_hdr) + sizeof(struct vlan_hdr);
+	} else if (flags & SEND_MPLS_LABEL) {
+		ether_hdr_size = sizeof(struct ether_hdr) + sizeof(mplsHdr_t);
+	} else if (flags & SEND_Q_IN_Q_IDS) {
+		ether_hdr_size = sizeof(struct ether_hdr) + sizeof(qinqHdr_t);
+	} else {
+		ether_hdr_size = sizeof(struct ether_hdr);
+	}
+
+	/* TODO maybe we can just set extra_count to 3 and use the max pkt size. */
+	if (flags & SEND_GRE_IPv4_HEADER) {
+      // see FILE: pktgen-gre.c FUNCTION: pktgen_gre_hdr_ctor
+      extra_count = 1;
+      ether_hdr_size += sizeof(greIp_t) - 4 * (3 - extra_count);
+  } else if (flags & SEND_GRE_ETHER_HEADER) {
+      // see FILE: pktgen-gre.c FUNCTION:pktgen_gre_ether_hdr_ctor
+      extra_count = 1;
+      pkt->ether_hdr_size += sizeof(greEther_t) - 4 * (3 - extra_count);
+  }
+
+	if (likely(ethType == ETHER_TYPE_IPv4)) {
+		if (likely(ipProto == PG_IPPROTO_TCP)) {
+			if (dport != PG_IPPROTO_L4_GTPU_PORT) {
+				tlen = ether_hdr_size + sizeof(ipHdr_t) + sizeof(tcpHdr_t);
+			} else {
+				tlen = ether_hdr_size + sizeof(ipHdr_t) + sizeof(tcpHdr_t) + sizeof(gtpuHdr_t);
+			}
+		} else if (ipProto == PG_IPPROTO_UDP) {
+			if (dport != PG_IPPROTO_L4_GTPU_PORT) {
+				tlen = ether_hdr_size + sizeof(ipHdr_t) + sizeof(udpHdr_t);
+			} else {
+				tlen = ether_hdr_size + sizeof(ipHdr_t) + sizeof(udpHdr_t) + sizeof(gtpuHdr_t);
+			}
+		} else if (ipProto == PG_IPPROTO_ICMP) {
+			tlen = ether_hdr_size + sizeof(ipHdr_t) + ICMP4_TIMESTAMP_SIZE;
+		}
+	} else if (ethType == ETHER_TYPE_IPv6) {
+		if (ipProto == PG_IPPROTO_TCP) {
+			tlen = sizeof(tcpHdr_t) + ether_hdr_size + sizeof(ipv6Hdr_t);
+		} else if (ipProto == PG_IPPROTO_UDP) {
+			tlen = sizeof(udpHdr_t) + ether_hdr_size + sizeof(ipv6Hdr_t);
+		}
+	} else if (ethType == ETHER_TYPE_ARP) {
+
+	} else
+		pktgen_log_error("Unknown EtherType 0x%04x", ethType);
+  return tlen+l4len;
+}
+
 /**************************************************************************//**
  *
  * pktgen_save - Save a configuration as a startup script
@@ -2851,6 +2917,28 @@ range_set_pkt_size(port_info_t *info, char *what, uint16_t size)
 
 /**************************************************************************//**
  *
+ * range_set_dns - Set dns l4 data.
+ *
+ * DESCRIPTION
+ * Set the dns l4 data.
+ *
+ * RETURNS: N/A
+ *
+ * SEE ALSO:
+ */
+
+void
+range_set_dns(port_info_t *info, char *dns_name, char *dns_type)
+{
+    pkt_seq_t *pkt = &info->seq_pkt[RANGE_PKT];
+    if (pkt->l4data) l4DataDestroy(pkt->l4data);
+    pkt->l4data = dnsQueryNew(dns_name, dns_type);
+    pkt->pktSize  = pktgen_calc_packet_size(info, RANGE_PKT);
+    info->range.pkt_size = pkt->pktSize;
+}
+
+/**************************************************************************//**
+ *
  * pktgen_send_arp_requests - Send an ARP request for a given port.
  *
  * DESCRIPTION
@@ -2984,6 +3072,9 @@ pktgen_set_seq(port_info_t *info, uint32_t seqnum,
 	pkt_seq_t     *pkt;
 
 	pkt = &info->seq_pkt[seqnum];
+  if (pkt->l4data) l4DataDestroy(pkt->l4data);
+  pkt->l4data = NULL;
+
 	memcpy(&pkt->eth_dst_addr, daddr, 6);
 	memcpy(&pkt->eth_src_addr, saddr, 6);
 	pkt->ip_mask = size_to_mask(ip_saddr->prefixlen);
@@ -3011,6 +3102,64 @@ pktgen_set_seq(port_info_t *info, uint32_t seqnum,
 	pkt->ethType        = (type == '6') ? ETHER_TYPE_IPv6 : ETHER_TYPE_IPv4;
 	pkt->vlanid         = vlanid;
 	pkt->gtpu_teid      = gtpu_teid;
+	pktgen_packet_ctor(info, seqnum, -1);
+}
+
+/**************************************************************************//**
+ *
+ * pktgen_set_dns_seq - Set a sequence dns query packet for given port
+ *
+ * DESCRIPTION
+ * Set the sequence packet information for all ports listed.
+ *
+ * RETURNS: N/A
+ *
+ * SEE ALSO:
+ */
+
+void
+pktgen_set_dns_seq(port_info_t *info, uint32_t seqnum,
+                   struct ether_addr *daddr, struct ether_addr *saddr,
+                   struct pg_ipaddr *ip_daddr, struct pg_ipaddr *ip_saddr,
+                   uint32_t sport, uint32_t dport, char type, char proto,
+                   char *dns_name, char *dns_type,
+                   uint16_t vlanid, uint32_t gtpu_teid)
+{
+	pkt_seq_t     *pkt;
+
+	pkt = &info->seq_pkt[seqnum];
+
+  if (pkt->l4data) l4DataDestroy(pkt->l4data);
+  pkt->l4data = dnsQueryNew(dns_name, dns_type);
+
+	memcpy(&pkt->eth_dst_addr, daddr, 6);
+	memcpy(&pkt->eth_src_addr, saddr, 6);
+	pkt->ip_mask = size_to_mask(ip_saddr->prefixlen);
+	if (type == '4') {
+		pkt->ip_src_addr.addr.ipv4.s_addr = htonl(
+		                ip_saddr->ipv4.s_addr);
+		pkt->ip_dst_addr.addr.ipv4.s_addr = htonl(
+		                ip_daddr->ipv4.s_addr);
+	} else {
+		memcpy(&pkt->ip_src_addr.addr.ipv6.s6_addr,
+		       ip_saddr->ipv6.s6_addr,
+		       sizeof(struct in6_addr));
+		memcpy(&pkt->ip_dst_addr.addr.ipv6.s6_addr,
+		       ip_daddr->ipv6.s6_addr,
+		       sizeof(struct in6_addr));
+	}
+	pkt->dport          = dport;
+	pkt->sport          = sport;
+	pkt->ipProto        = (proto == 'u') ? PG_IPPROTO_UDP :
+		(proto == 'i') ? PG_IPPROTO_ICMP : PG_IPPROTO_TCP;
+	/* Force the IP protocol to IPv4 if this is a ICMP packet. */
+	if (proto == 'i')
+		type = '4';
+	pkt->ethType        = (type == '6') ? ETHER_TYPE_IPv6 : ETHER_TYPE_IPv4;
+	pkt->vlanid         = vlanid;
+	pkt->gtpu_teid      = gtpu_teid;
+  pkt->pktSize  = pktgen_calc_packet_size(info, seqnum);
+  /* pkt->pktSize  = 455; */
 	pktgen_packet_ctor(info, seqnum, -1);
 }
 

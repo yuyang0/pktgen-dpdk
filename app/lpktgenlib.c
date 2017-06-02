@@ -211,6 +211,19 @@ getf_string(lua_State *L, const char *field)
 	return value;
 }
 
+static __inline__ char *
+getf_string_opt(lua_State *L, const char *field)
+{
+    char      *value = NULL;
+
+    lua_getfield(L, 3, field);
+    if (lua_isstring(L, -1) )
+        value   = (char *)luaL_checkstring(L, -1);
+    lua_pop(L, 1);
+
+    return value;
+}
+
 static inline void
 parse_portlist(const char *buf, void *pl)
 {
@@ -402,6 +415,7 @@ set_seqTable(lua_State *L, uint32_t seqnum)
 	struct pg_ipaddr ip_daddr;
 	struct pg_ipaddr ip_saddr;
 	char *ipProto, *ethType;
+  char *dnsName=NULL, *dnsType=NULL;
 
 	rte_parse_portlist(luaL_checkstring(L, 2), &portlist);
 
@@ -417,6 +431,8 @@ set_seqTable(lua_State *L, uint32_t seqnum)
 	ethType     = getf_string(L, "ethType");
 	vlanid      = getf_integer(L, "vlanid");
 	pktSize     = getf_integer(L, "pktSize");
+  dnsName     = getf_string_opt(L, "dnsName");
+  dnsType     = getf_string_opt(L, "dnsType");
 
 	lua_getfield(L, 3, "gtpu_teid");
 	if (lua_isinteger(L, -1))
@@ -430,11 +446,20 @@ set_seqTable(lua_State *L, uint32_t seqnum)
 		return -1;
 	}
 
-	foreach_port(portlist,
-	             pktgen_set_seq(info, seqnum, &daddr, &saddr, &ip_daddr,
-	                            &ip_saddr,
-	                            sport, dport, ethType[3], ipProto[0],
-	                            vlanid, pktSize, gtpu_teid) );
+  if (!dnsName) {
+    foreach_port(portlist,
+                 pktgen_set_seq(info, seqnum, &daddr, &saddr, &ip_daddr,
+                                &ip_saddr,
+                                sport, dport, ethType[3], ipProto[0],
+                                vlanid, pktSize, gtpu_teid) );
+  } else {
+      foreach_port(portlist,
+                   pktgen_set_dns_seq(info, seqnum, &daddr, &saddr, &ip_daddr,
+                                  &ip_saddr,
+                                  sport, dport, ethType[3], ipProto[0],
+                                  dnsName, dnsType,
+                                  vlanid, gtpu_teid) );
+  }
 
 	pktgen_update_display();
 
@@ -1947,6 +1972,40 @@ range_pkt_size(lua_State *L)
 
 /**************************************************************************//**
  *
+ * range_dns - Set the port dns packet information.
+ *
+ * DESCRIPTION
+ * Set the port dns packet information.
+ *
+ * RETURNS: N/A
+ *
+ * SEE ALSO:
+ */
+
+static int
+range_dns(lua_State *L)
+{
+    portlist_t portlist;
+    char *dns_name, *dns_type;
+
+    switch (lua_gettop(L) ) {
+    default: return luaL_error(L, "pkt_size, wrong number of arguments");
+    case 3:
+        break;
+    }
+    rte_parse_portlist(luaL_checkstring(L, 1), &portlist);
+    dns_name = (char *)luaL_checkstring(L, 2);
+    dns_type = (char *)luaL_checkstring(L, 3);
+
+    foreach_port(portlist,
+                 range_set_dns(info, dns_name, dns_type) );
+
+    pktgen_update_display();
+    return 0;
+}
+
+/**************************************************************************//**
+ *
  * range - Enable or disable the range data sending.
  *
  * DESCRIPTION
@@ -3297,6 +3356,7 @@ static const luaL_Reg pktgenlib_range[] = {
 	{"qinqids",       range_qinqids},		/* Set the Q-in-Q ID values */
 	{"gre_key",       range_gre_key},		/* Set the GRE key */
 	{"pkt_size",      range_pkt_size},		/* the packet size for a range port */
+  {"dns",           range_dns},
 	{NULL, NULL}
 };
 

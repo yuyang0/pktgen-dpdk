@@ -540,6 +540,14 @@ pktgen_packet_ctor(port_info_t *info, int32_t seq_idx, int32_t type)
 			    (sizeof(pkt_hdr_t) + sizeof(pkt->pad)),
 			    info->fill_pattern_type, info->user_pattern);
 
+  if (pkt->l4data) {
+      L4DATA_UPDATE(pkt->l4data);
+      size_t l4len = pkt->l4data->len;
+      char *start = (char *)(&(pkt->hdr));
+      start += (pkt->pktSize - l4len);
+      memcpy(start, pkt->l4data->data, l4len);
+  }
+
 	char *ether_hdr = pktgen_ether_hdr_ctor(info, pkt, eth);
 
 	/* Add GRE header and adjust ether_hdr pointer if requested */

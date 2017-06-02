@@ -166,6 +166,7 @@ void range_set_pkt_type(port_info_t *info, const char *type);
 void range_set_pkt_size(port_info_t *info,
 				      char *what,
 				      uint16_t size);
+void range_set_dns(port_info_t *info, char *dns_name, char *dns_type);
 void range_set_gtpu_teid(port_info_t *info, char *what, uint32_t teid);
 void range_set_vlan_id(port_info_t *info, char *what, uint16_t id);
 void range_set_mpls_entry(port_info_t *info, uint32_t mpls_entry);
@@ -190,6 +191,12 @@ void pktgen_set_seq(port_info_t *info,
 			   uint32_t pktsize,
 			   uint32_t gtpu_teid);
 
+void pktgen_set_dns_seq(port_info_t *info, uint32_t seqnum,
+                        struct ether_addr *daddr, struct ether_addr *saddr,
+                        struct pg_ipaddr *ip_daddr, struct pg_ipaddr *ip_saddr,
+                        uint32_t sport, uint32_t dport, char type, char proto,
+                        char *dns_name, char *dns_type,
+                        uint16_t vlanid, uint32_t gtpu_teid);
 /* Packet */
 void pktgen_send_pkt(port_info_t *info, uint32_t seqnum);
 void pktgen_recv_pkt(port_info_t *info);
