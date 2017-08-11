@@ -173,14 +173,14 @@ l4Data_t *dnsQueryNew(char *name, char *type_ss) {
     SET_RD(hdr.flag);
 
     strncpy(name_buf, name, MAX_DOMAIN_LEN);
-    if (endswith(name, ".") == false) {
-        strncat(name, ".", 2);
+    if (endswith(name_buf, ".") == false) {
+        strncat(name_buf, ".", 2);
     }
-    dot2lenlabel(name, NULL);
+    dot2lenlabel(name_buf, NULL);
 
     dnsHdr_dump(&hdr, start, DNS_HDR_SIZE);
     start += DNS_HDR_SIZE;
-    int n = dumpDnsQuestion(start, 4096-DNS_HDR_SIZE, name, type, DNS_CLASS_IN);
+    int n = dumpDnsQuestion(start, 4096-DNS_HDR_SIZE, name_buf, type, DNS_CLASS_IN);
 
     d->len = n + DNS_HDR_SIZE;
     d->data  = malloc(d->len);
